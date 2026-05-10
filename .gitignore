@@ -1,0 +1,8 @@
+.venv/
+.models/
+media/
+analysis/
+__pycache__/
+*.pyc
+*.part
+*.ytdl

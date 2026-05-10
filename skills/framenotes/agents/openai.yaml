@@ -1,0 +1,4 @@
+interface:
+  display_name: "FrameNotes"
+  short_description: "Turn videos into editable visual notes"
+  default_prompt: "Use $framenotes to turn this video link into an editable note package."
