@@ -155,6 +155,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File <repo>\scripts\process-v
 
 **Do NOT use `notify_on_complete`** — even with `2>&1`, residual stderr and buffered output can leak into the completion notification. Instead, manually check for completion.
 
+**Polling interval:** Check pipeline status every ~10 minutes. Between checks, stay silent — the user knows it's running.
+
 **WSL log buffering:** PowerShell output buffering means `pipeline.log` may stay empty long after the process starts. `tail -f` is unreliable. Use these methods instead (in priority order):
 
 1. **Check the analysis directory for new folders:**
@@ -278,7 +280,7 @@ The pipeline produces technical output (GPU names, model sizes, ASR progress per
 [STAGE] 6/6 ASR → relay "Transcribing audio..." + update from [ASR] lines
 ```
 
-For long videos (>10 min), ASR dominates runtime. Watch for `[ASR]` progress lines (e.g. `[ASR]  45.2% 00:14:03`) and relay "Transcribing: ~45%" every few minutes. Do NOT relay every single progress line — summarize at meaningful intervals.
+For long videos (>10 min), ASR dominates runtime. Relay progress only at ~20% intervals (20%, 40%, 60%, 80%). Do NOT relay every `[ASR]` percentage line.
 
 When the pipeline finishes, summarize:
 
