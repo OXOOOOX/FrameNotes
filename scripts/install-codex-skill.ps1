@@ -38,3 +38,7 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
 Write-Host "Installed FrameNotes skill (v$version):"
 Write-Host "      $targetSkill"
+Write-Host ""
+Write-Host "      Run the following in any project to set up dependencies:"
+Write-Host "        python -m venv .venv"
+Write-Host "        .\.venv\Scripts\python.exe -m pip install -r $repoRoot\requirements.txt"

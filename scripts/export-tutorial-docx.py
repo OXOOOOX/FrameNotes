@@ -5,13 +5,21 @@ from pathlib import Path
 from docx import Document
 from docx.enum.section import WD_SECTION_START
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 
 TABLE_WIDTH_DXA = 9360
+
+# Priority order: code > bold > italic > link
+INLINE_RE = re.compile(
+    r"(`[^`]+`)"                         # 1: `code`
+    r"|(\*\*[^*]+\*\*)"                   # 2: **bold**
+    r"|(\*[^*]+\*)"                        # 3: *italic*
+    r"|(\[([^\]]+)\]\(([^)]+)\))"         # 4: [text](url)
+)
 
 
 def set_cell_shading(cell, fill):
@@ -112,6 +120,78 @@ def style_document(doc):
     p._p.append(field)
 
 
+def add_hyperlink(paragraph, text, url):
+    part = paragraph.part
+    r_id = part.relate_to(
+        url,
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+        is_external=True,
+    )
+
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), r_id)
+
+    r = OxmlElement("w:r")
+    rPr = OxmlElement("w:rPr")
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "0563C1")
+    rPr.append(color)
+    u = OxmlElement("w:u")
+    u.set(qn("w:val"), "single")
+    rPr.append(u)
+    rFonts = OxmlElement("w:rFonts")
+    rFonts.set(qn("w:ascii"), "Arial")
+    rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+    rPr.append(rFonts)
+    sz = OxmlElement("w:sz")
+    sz.set(qn("w:val"), "21")
+    rPr.append(sz)
+    r.append(rPr)
+
+    t = OxmlElement("w:t")
+    t.set(qn("xml:space"), "preserve")
+    t.text = text
+    r.append(t)
+
+    hyperlink.append(r)
+    paragraph._p.append(hyperlink)
+
+
+def render_inline(paragraph, text):
+    """Parse text for inline markdown and add formatted runs."""
+    last_end = 0
+    for m in INLINE_RE.finditer(text):
+        if m.start() > last_end:
+            paragraph.add_run(text[last_end : m.start()])
+
+        if m.group(1):  # `code`
+            run = paragraph.add_run(m.group(1)[1:-1])
+            run.font.name = "Consolas"
+            run._element.rPr.rFonts.set(qn("w:eastAsia"), "Consolas")
+            run.font.size = Pt(9)
+        elif m.group(2):  # **bold**
+            run = paragraph.add_run(m.group(2)[2:-2])
+            run.bold = True
+        elif m.group(3):  # *italic*
+            run = paragraph.add_run(m.group(3)[1:-1])
+            run.italic = True
+        elif m.group(4):  # [text](url)
+            add_hyperlink(paragraph, m.group(5), m.group(6))
+
+        last_end = m.end()
+
+    if last_end < len(text):
+        paragraph.add_run(text[last_end:])
+
+
+def add_formatted_paragraph(doc, text, style=None):
+    """Add a paragraph with inline markdown rendering."""
+    p = doc.add_paragraph(style=style) if style else doc.add_paragraph()
+    p.clear()
+    render_inline(p, text)
+    return p
+
+
 def add_table(doc, rows):
     if not rows:
         return
@@ -126,13 +206,10 @@ def add_table(doc, rows):
         for c in range(columns):
             text = row[c] if c < len(row) else ""
             cell = table.cell(r, c)
-            cell.text = ""
-            p = cell.paragraphs[0]
-            p.paragraph_format.space_after = Pt(0)
-            run = p.add_run(text)
-            run.font.size = Pt(9.5)
+            cell.paragraphs[0].clear()
+            render_inline(cell.paragraphs[0], text)
+            cell.paragraphs[0].paragraph_format.space_after = Pt(0)
             if r == 0:
-                run.bold = True
                 set_cell_shading(cell, "EAF2F8")
     doc.add_paragraph()
 
@@ -178,9 +255,10 @@ def parse_markdown(md_path):
             blocks.append(("table", table_rows))
             table_rows = []
 
-        image_match = re.match(r"!\[[^\]]*\]\((.+)\)", line)
-        if image_match:
-            blocks.append(("image", image_match.group(1)))
+        if re.fullmatch(r"[-*_]{3,}\s*", line):
+            blocks.append(("hr", ""))
+        elif line.startswith("> "):
+            blocks.append(("blockquote", line[2:].strip()))
         elif line.startswith("# "):
             blocks.append(("title", line[2:].strip()))
         elif line.startswith("## "):
@@ -206,23 +284,42 @@ def parse_markdown(md_path):
 def add_blocks(doc, md_path, blocks):
     for kind, content in blocks:
         if kind == "title":
-            doc.add_paragraph(content, style="Title")
+            add_formatted_paragraph(doc, content, style="Title")
         elif kind == "h1":
-            doc.add_paragraph(content, style="Heading 1")
+            add_formatted_paragraph(doc, content, style="Heading 1")
         elif kind == "h2":
-            doc.add_paragraph(content, style="Heading 2")
+            add_formatted_paragraph(doc, content, style="Heading 2")
         elif kind == "para":
-            doc.add_paragraph(content)
+            add_formatted_paragraph(doc, content)
         elif kind == "bullet":
-            doc.add_paragraph(content, style="List Bullet")
+            add_formatted_paragraph(doc, content, style="List Bullet")
         elif kind == "number":
-            doc.add_paragraph(content, style="List Number")
+            add_formatted_paragraph(doc, content, style="List Number")
         elif kind == "checkbox":
-            doc.add_paragraph(f"☐ {content}", style="List Bullet")
+            add_formatted_paragraph(doc, "☐ " + content, style="List Bullet")
         elif kind == "table":
             add_table(doc, content)
         elif kind == "image":
             add_image(doc, md_path, content)
+        elif kind == "blockquote":
+            p = add_formatted_paragraph(doc, content)
+            p.paragraph_format.left_indent = Inches(0.4)
+            for run in p.runs:
+                run.italic = True
+                run.font.color.rgb = RGBColor(89, 89, 89)
+        elif kind == "hr":
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(8)
+            p.paragraph_format.space_after = Pt(8)
+            pPr = p._p.get_or_add_pPr()
+            pBdr = OxmlElement("w:pBdr")
+            bottom = OxmlElement("w:bottom")
+            bottom.set(qn("w:val"), "single")
+            bottom.set(qn("w:sz"), "6")
+            bottom.set(qn("w:space"), "4")
+            bottom.set(qn("w:color"), "CCCCCC")
+            pBdr.append(bottom)
+            pPr.append(pBdr)
         elif kind == "code":
             p = doc.add_paragraph()
             run = p.add_run(content)

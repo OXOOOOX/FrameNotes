@@ -1,0 +1,5 @@
+faster-whisper
+huggingface_hub
+ctranslate2
+python-docx
+yt-dlp

@@ -14,6 +14,20 @@ Prefer an existing FrameNotes repo when present. If the repo location is unknown
 
 Generated media and process artifacts belong under `media/` and `analysis/`. Do not ask the user to approve every stage; print concise progress and artifact paths while running.
 
+## Environment Setup
+
+**Windows (native):** Use `powershell -NoProfile -ExecutionPolicy Bypass`.
+
+**WSL / Linux:** PowerShell is not available. Use `powershell.exe` (Windows host executable) for all `.ps1` scripts. If a command fails with "command not found: powershell", retry with `powershell.exe`.
+
+**Python dependencies:** The project requires a venv at `.venv/` with packages listed in `requirements.txt`. If packages are missing, install them silently:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Individual scripts (e.g. `export-tutorial-docx.ps1`) auto-install their own missing dependencies.
+
 ## BiliBili Login
 
 For BiliBili URLs, a cookies.txt at the repo root unlocks 720p/1080p. Without it, downloads cap at 480p — screenshots suffer noticeably.
@@ -30,7 +44,7 @@ If the user declines, say "no problem" and proceed with guest mode — the pipel
 
 ## Core Command
 
-For a URL, run the full pipeline:
+For a URL, run the full pipeline (use `powershell.exe` on WSL/Linux):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\process-video-url.ps1 "<video-url>" -Language auto -AsrModel auto -AsrDevice auto
@@ -53,6 +67,17 @@ Use `-AsrModel auto -AsrDevice auto` unless the user explicitly requests a model
 ## Screenshot Review
 
 After the pipeline creates `frame_review.json` and `frame_review_prompt.md`, inspect the selected screenshots and candidates as an agent with multimodal image understanding. Use `preview_frames/` (downsampled to 720p) when the original `frames/` are too large for the multimodal viewer. Do not create a separate vision API integration for this step.
+
+**Vision degradation strategy:** If the current model does not support image input (pure text model, or vision API returns 400 errors), do NOT attempt browser_navigate to local file paths. Instead:
+
+1. Read `frame_review.json` and `transcript.json`
+2. For each pending frame, check the timestamp against the transcript
+3. Accept frames at clear content boundaries (heading mentions, topic shifts, new chapter)
+4. Reject frames in silent/gap transitions or pure filler segments
+5. Write the results directly into `frame_review.json` (status, reason, checks)
+6. Report: "Model does not support vision — reviewed N frames by transcript alignment, accepted X, rejected Y"
+
+Do not waste time trying multiple vision approaches when the model is text-only. One 400 error is enough signal.
 
 For each selected screenshot:
 
@@ -116,6 +141,19 @@ For operation/tutorial videos, produce a usable tutorial, not just a summary. Ea
 
 For concept explainers, prefer a chapter timeline, core ideas, comparisons, and screenshot evidence (still using `![](frames/frame_XXXXX.jpg)` on its own line for each relevant frame). Do not force a step-by-step tutorial when the video is not procedural.
 
+## Pipeline Output
+
+The pipeline produces technical output (GPU names, model sizes, ASR progress percentages, probability scores). Do NOT forward this raw output to the user. Instead, summarize each stage in 1 line after it completes:
+
+```
+Download done
+Keyframes extracted (N frames)
+ASR done (zh, N segments)
+Pre-screen done (X kept, Y rejected)
+```
+
+Only surface warnings or errors that need user action. The raw output is available in `pipeline.json` if needed.
+
 ## Deliverables
 
 For user-facing packages, use title-based filenames:
@@ -130,9 +168,17 @@ Keep working files such as `final_tutorial.md` internal. Do not call the public 
 Export DOCX with:
 
 ```powershell
-$name = powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\get-safe-title.ps1 -Text "<video title>"
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\export-tutorial-docx.ps1 -Markdown "<final_tutorial.md>" -NamePrefix "$name.note"
+$name = powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\get-safe-title.ps1 -Text "<video title>"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\export-tutorial-docx.ps1 -Markdown "<final_tutorial.md>" -NamePrefix "$name.note"
 ```
+
+Export PDF from the resulting DOCX:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\export-tutorial-pdf.ps1 -Docx "<path-to-.docx>"
+```
+
+This tries `docx2pdf` first, then falls back to Word COM. Install `docx2pdf` with `.\.venv\Scripts\pip.exe install docx2pdf` if needed.
 
 When producing DOCX/PDF, use the Documents skill if available and render/verify the document before delivery. If LibreOffice is unavailable on Windows, Microsoft Word COM plus PDF-to-PNG rendering is acceptable for visual QA.
 
