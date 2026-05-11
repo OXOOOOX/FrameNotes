@@ -14,7 +14,11 @@ param(
 
     [double]$FrameReviewWindow = 4,
 
-    [double]$FrameReviewFps = 1
+    [double]$FrameReviewFps = 1,
+
+    [switch]$SkipDownload,
+
+    [switch]$SkipAsr
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,7 +29,7 @@ function Write-Stage {
         [int]$Total,
         [string]$Message
     )
-    Write-Host "[$Current/$Total] $Message"
+    Write-Host "[STAGE] $Current/$Total $Message"
 }
 
 function Start-PipelineStage {
@@ -73,25 +77,37 @@ $pipelineStages = [System.Collections.ArrayList]::new()
 
 $stageTotal = 6
 
-$stageStart = Start-PipelineStage 1 $stageTotal "Downloading video"
-Invoke-Checked { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "download-video.ps1") $Url } "Video download failed."
-
-$video = Get-ChildItem -Path (Join-Path $repoRoot "media") -Filter *.mp4 -Recurse -File |
-    Where-Object { $_.Name -notmatch "\.f\d+\.mp4$" } |
-    Where-Object { $_.LastWriteTime -ge $stageStart.AddSeconds(-2) } |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
-if (-not $video) {
+if ($SkipDownload) {
+    Write-Host "[STAGE] Skip Download (using existing video)"
     $video = Get-ChildItem -Path (Join-Path $repoRoot "media") -Filter *.mp4 -Recurse -File |
         Where-Object { $_.Name -notmatch "\.f\d+\.mp4$" } |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
+    if (-not $video) {
+        throw "SkipDownload: no existing MP4 found under media."
+    }
+    Write-Host "      video: $($video.FullName)"
+} else {
+    $stageStart = Start-PipelineStage 1 $stageTotal "Downloading video"
+    Invoke-Checked { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "download-video.ps1") $Url } "Video download failed."
+
+    $video = Get-ChildItem -Path (Join-Path $repoRoot "media") -Filter *.mp4 -Recurse -File |
+        Where-Object { $_.Name -notmatch "\.f\d+\.mp4$" } |
+        Where-Object { $_.LastWriteTime -ge $stageStart.AddSeconds(-2) } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $video) {
+        $video = Get-ChildItem -Path (Join-Path $repoRoot "media") -Filter *.mp4 -Recurse -File |
+            Where-Object { $_.Name -notmatch "\.f\d+\.mp4$" } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+    }
+    if (-not $video) {
+        throw "No downloaded MP4 found under media."
+    }
+    Write-Host "      video: $($video.FullName)"
+    Add-PipelineStage $pipelineStages "download" $stageStart @{ video = $video.FullName }
 }
-if (-not $video) {
-    throw "No downloaded MP4 found under media."
-}
-Write-Host "      video: $($video.FullName)"
-Add-PipelineStage $pipelineStages "download" $stageStart @{ video = $video.FullName }
 
 $stageStart = Start-PipelineStage 2 $stageTotal "Extracting scene-change keyframes"
 $keyframeOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "extract-keyframes.ps1") -Video $video.FullName
@@ -141,56 +157,80 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "      预览帧生成完成"
 
-$stageStart = Start-PipelineStage 5 $stageTotal "Extracting audio for ASR"
-$audioOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "extract-audio.ps1") -Video $video.FullName
-if ($LASTEXITCODE -ne 0) {
-    throw "Audio extraction failed."
-}
-$audioPath = $audioOutput | Where-Object { $_ -like "*.wav" } | Select-Object -Last 1
-$audio = if ($audioPath) { Get-Item -LiteralPath $audioPath } else { $null }
-if (-not $audio) {
-    throw "No audio.wav was produced by audio extraction."
-}
-Write-Host "      audio: $($audio.FullName)"
-Add-PipelineStage $pipelineStages "audio" $stageStart @{ audio = $audio.FullName }
-
-if ($AsrModel -eq "auto") {
-    Write-Host "      choosing ASR model based on this machine"
-    $recommendation = powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "recommend-asr-model.ps1") -Video $video.FullName -Purpose final
-    $recommendation | ForEach-Object { Write-Host "      $_" }
-    $recommendedLine = $recommendation | Where-Object { $_ -like "recommended_model=*" } | Select-Object -Last 1
-    $recommendedDeviceLine = $recommendation | Where-Object { $_ -like "recommended_device=*" } | Select-Object -Last 1
-    $AsrModel = ($recommendedLine -replace "recommended_model=", "").Trim()
-    if ($AsrDevice -eq "auto" -and $recommendedDeviceLine) {
-        $AsrDevice = ($recommendedDeviceLine -replace "recommended_device=", "").Trim()
+if ($SkipAsr) {
+    Write-Host "[STAGE] Skip ASR (using existing transcript)"
+    $latestAudioDir = Get-ChildItem -Path (Join-Path $repoRoot "analysis") -Directory -Filter "*_audio_*" |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $latestAudioDir) {
+        throw "SkipAsr: no existing audio directory found under analysis."
     }
-    if (-not $AsrModel) {
-        $AsrModel = "medium"
+    $audioPath = Join-Path $latestAudioDir.FullName "audio.wav"
+    $audio = if (Test-Path -LiteralPath $audioPath) { Get-Item -LiteralPath $audioPath } else { $null }
+    $transcript = Get-ChildItem -Path $latestAudioDir.FullName -Filter transcript.txt -File |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    $transcriptJson = Get-ChildItem -Path $latestAudioDir.FullName -Filter transcript.json -File |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $transcriptJson) {
+        throw "SkipAsr: no transcript.json found in $($latestAudioDir.FullName)"
     }
-}
+    Write-Host "      using transcript: $($transcript.FullName)"
+    Add-PipelineStage $pipelineStages "audio" (Get-Date) @{ audio = if ($audio) { $audio.FullName } else { $null }; skipped = $true }
+    Add-PipelineStage $pipelineStages "asr" (Get-Date) @{ transcript = if ($transcript) { $transcript.FullName } else { $null }; transcript_json = $transcriptJson.FullName; model = "skipped"; device = "skipped"; skipped = $true }
+} else {
+    $stageStart = Start-PipelineStage 5 $stageTotal "Extracting audio for ASR"
+    $audioOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "extract-audio.ps1") -Video $video.FullName
+    if ($LASTEXITCODE -ne 0) {
+        throw "Audio extraction failed."
+    }
+    $audioPath = $audioOutput | Where-Object { $_ -like "*.wav" } | Select-Object -Last 1
+    $audio = if ($audioPath) { Get-Item -LiteralPath $audioPath } else { $null }
+    if (-not $audio) {
+        throw "No audio.wav was produced by audio extraction."
+    }
+    Write-Host "      audio: $($audio.FullName)"
+    Add-PipelineStage $pipelineStages "audio" $stageStart @{ audio = $audio.FullName }
 
-$modelsDir = Join-Path $HOME ".cache\framenotes\models"
-if ($AsrModel -notmatch "[\\/]" -and -not (Test-Path (Join-Path $modelsDir "faster-whisper-$AsrModel\model.bin"))) {
-    Write-Host "      local ASR model not found; downloading faster-whisper-$AsrModel"
-    Invoke-Checked { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "download-whisper-model.ps1") -Model $AsrModel -AutoDownload } "ASR model download failed."
-}
+    if ($AsrModel -eq "auto") {
+        Write-Host "      choosing ASR model based on this machine"
+        $recommendation = powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "recommend-asr-model.ps1") -Video $video.FullName -Purpose final
+        $recommendation | ForEach-Object { Write-Host "      $_" }
+        $recommendedLine = $recommendation | Where-Object { $_ -like "recommended_model=*" } | Select-Object -Last 1
+        $recommendedDeviceLine = $recommendation | Where-Object { $_ -like "recommended_device=*" } | Select-Object -Last 1
+        $AsrModel = ($recommendedLine -replace "recommended_model=", "").Trim()
+        if ($AsrDevice -eq "auto" -and $recommendedDeviceLine) {
+            $AsrDevice = ($recommendedDeviceLine -replace "recommended_device=", "").Trim()
+        }
+        if (-not $AsrModel) {
+            $AsrModel = "medium"
+        }
+    }
 
-$stageStart = Start-PipelineStage 6 $stageTotal "Running ASR with faster-whisper model '$AsrModel'"
-Invoke-Checked { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "transcribe-audio.ps1") -Audio $audio.FullName -Model $AsrModel -Language $Language -Device $AsrDevice } "ASR transcription failed."
+    $modelsDir = Join-Path $HOME ".cache\framenotes\models"
+    if ($AsrModel -notmatch "[\\/]" -and -not (Test-Path (Join-Path $modelsDir "faster-whisper-$AsrModel\model.bin"))) {
+        Write-Host "      local ASR model not found; downloading faster-whisper-$AsrModel"
+        Invoke-Checked { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "download-whisper-model.ps1") -Model $AsrModel -AutoDownload } "ASR model download failed."
+    }
 
-$transcript = Get-ChildItem -Path $audio.DirectoryName -Filter transcript.txt -File |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
-$transcriptJson = Get-ChildItem -Path $audio.DirectoryName -Filter transcript.json -File |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
-if (-not $transcript) {
-    Write-Warning "ASR completed but no transcript.txt was found."
+    $stageStart = Start-PipelineStage 6 $stageTotal "Running ASR with faster-whisper model '$AsrModel'"
+    Invoke-Checked { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "transcribe-audio.ps1") -Audio $audio.FullName -Model $AsrModel -Language $Language -Device $AsrDevice } "ASR transcription failed."
+
+    $transcript = Get-ChildItem -Path $audio.DirectoryName -Filter transcript.txt -File |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    $transcriptJson = Get-ChildItem -Path $audio.DirectoryName -Filter transcript.json -File |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $transcript) {
+        Write-Warning "ASR completed but no transcript.txt was found."
+    }
+    if (-not $transcriptJson) {
+        Write-Warning "ASR completed but no transcript.json was found."
+    }
+    Add-PipelineStage $pipelineStages "asr" $stageStart @{ transcript = if ($transcript) { $transcript.FullName } else { $null }; transcript_json = if ($transcriptJson) { $transcriptJson.FullName } else { $null }; model = $AsrModel; device = $AsrDevice }
 }
-if (-not $transcriptJson) {
-    Write-Warning "ASR completed but no transcript.json was found."
-}
-Add-PipelineStage $pipelineStages "asr" $stageStart @{ transcript = if ($transcript) { $transcript.FullName } else { $null }; transcript_json = if ($transcriptJson) { $transcriptJson.FullName } else { $null }; model = $AsrModel; device = $AsrDevice }
 
 $prescreenStageStart = Get-Date
 Write-Host "      pre-screening frames via text LLM (skip obvious rejects)"

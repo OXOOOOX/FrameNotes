@@ -1,7 +1,7 @@
 ---
 name: framenotes
 description: Turn online or local teaching videos into editable visual note packages. Use when Codex is given a video URL or video file and asked to download, transcribe, summarize, create notes, create a tutorial, extract screenshots, review screenshot quality, run ASR, or export editable DOCX/PDF deliverables from video content.
-version: "2026-05-11.2"
+version: "2026-05-11.3"
 ---
 
 # FrameNotes
@@ -64,6 +64,11 @@ The pipeline should:
 
 Use `-AsrModel auto -AsrDevice auto` unless the user explicitly requests a model/device. The project should prefer CUDA only when CUDA ASR is already usable; if an NVIDIA GPU is present but CUDA is not ready, recommend the CPU first run and show the optional CUDA setup path.
 
+**Skip flags** for re-runs and debugging:
+
+- `-SkipDownload`: use the most recent MP4 in `media/` instead of re-downloading
+- `-SkipAsr`: use the most recent `transcript.json` in `analysis/` instead of re-extracting audio and re-running ASR
+
 ## Screenshot Review
 
 After the pipeline creates `frame_review.json` and `frame_review_prompt.md`, inspect the selected screenshots and candidates as an agent with multimodal image understanding. Use `preview_frames/` (downsampled to 720p) when the original `frames/` are too large for the multimodal viewer. Do not create a separate vision API integration for this step.
@@ -116,6 +121,21 @@ When only a few sections need repair, do not rerun full-video ASR. Use targeted 
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\transcribe-segments.ps1 -Audio "<audio.wav>" -Range "00:01:20-00:01:45" -Padding 8 -Model medium -Language auto
 ```
 
+## Agent Conduct
+
+Core rules for how you present work to the user:
+
+**Do NOT expose internal operations.** The user should never see raw `read_file`, `patch`, `grep`, `bash`, or other tool call details. When you need to fix a bug or inspect code mid-session, do it quietly. Tell the user the result ("fixed, re-running export" / "已修复，重新导出中"), not the process.
+
+**Handle missing dependencies silently.** If a script fails with `ModuleNotFoundError`, install the missing package in `.venv/` and retry automatically. Only inform the user if the fix requires their action (e.g., "need to install system package X").
+
+**Pre-check before running.** Before starting the pipeline, quickly verify:
+- `powershell.exe` works (WSL: use `powershell.exe`, not `powershell`)
+- `.venv/Scripts/python.exe` exists
+- `requirements.txt` packages are installed (spot-check `python -c "import docx"`)
+
+**Progress beats silence.** For pipelines expected to run >2 minutes, relay `[STAGE]` markers to the user so they know progress is happening. Never leave the user staring at a blank chat for 38 minutes.
+
 ## Note Quality
 
 Start the note with a decision block:
@@ -141,16 +161,35 @@ For operation/tutorial videos, produce a usable tutorial, not just a summary. Ea
 
 For concept explainers, prefer a chapter timeline, core ideas, comparisons, and screenshot evidence (still using `![](frames/frame_XXXXX.jpg)` on its own line for each relevant frame). Do not force a step-by-step tutorial when the video is not procedural.
 
+**Long videos (>20 min):** Rich, multi-topic videos should not be crammed into a single compressed note. Split into parts:
+
+- `final_tutorial.md` — complete timeline, all chapters, key screenshots (overview)
+- `part2-deep-dive.md` — detailed analysis of specific topics, data points, techniques worth adopting
+
+Each part exports independently to DOCX/PDF. Let the agent judge whether the video content density warrants splitting; do not compress just to fit a token budget.
+
 ## Pipeline Output
 
-The pipeline produces technical output (GPU names, model sizes, ASR progress percentages, probability scores). Do NOT forward this raw output to the user. Instead, summarize each stage in 1 line after it completes:
+The pipeline produces technical output (GPU names, model sizes, ASR progress percentages, probability scores). Do NOT forward this raw output to the user. Instead, watch for `[STAGE]` markers and relay concise one-line summaries:
 
 ```
-Download done
-Keyframes extracted (N frames)
-ASR done (zh, N segments)
-Pre-screen done (X kept, Y rejected)
+[STAGE] 1/6 Downloading video → relay "Downloading video..."
+[STAGE] 2/6 Extracting keyframes → relay "Extracting keyframes..."
+[STAGE] 3/6 Building multimodal package → relay "Building frame package..."
+[STAGE] 4/6 Frame review package → relay "Preparing frames for review..."
+[STAGE] 5/6 Extracting audio → relay "Extracting audio..."
+[STAGE] 6/6 ASR → relay "Transcribing audio..." + update from [ASR] lines
 ```
+
+For long videos (>10 min), ASR dominates runtime. Watch for `[ASR]` progress lines (e.g. `[ASR]  45.2% 00:14:03`) and relay "Transcribing: ~45%" every few minutes. Do NOT relay every single progress line — summarize at meaningful intervals.
+
+When the pipeline finishes, summarize:
+
+```
+Download done (49s), keyframes extracted (24 frames), ASR done (zh, 20 segments), pre-screen done (18 kept, 6 rejected)
+```
+
+**Failure visibility:** If a stage fails and the pipeline exits non-zero, tell the user which stage failed and what the error was. Do not hide failures behind vague "something went wrong" messages.
 
 Only surface warnings or errors that need user action. The raw output is available in `pipeline.json` if needed.
 

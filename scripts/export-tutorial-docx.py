@@ -255,7 +255,9 @@ def parse_markdown(md_path):
             blocks.append(("table", table_rows))
             table_rows = []
 
-        if re.fullmatch(r"[-*_]{3,}\s*", line):
+        if m := re.fullmatch(r"!\[([^\]]*)\]\(([^)]+)\)", line):
+            blocks.append(("image", m.group(2)))
+        elif re.fullmatch(r"[-*_]{3,}\s*", line):
             blocks.append(("hr", ""))
         elif line.startswith("> "):
             blocks.append(("blockquote", line[2:].strip()))
