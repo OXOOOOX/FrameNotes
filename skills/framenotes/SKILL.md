@@ -1,7 +1,7 @@
 ---
 name: framenotes
 description: Turn online or local teaching videos into editable visual note packages. Use when Codex is given a video URL or video file and asked to download, transcribe, summarize, create notes, create a tutorial, extract screenshots, review screenshot quality, run ASR, or export editable DOCX/PDF deliverables from video content.
-version: "2026-05-11.6"
+version: "2026-05-11.7"
 ---
 
 # FrameNotes
@@ -78,11 +78,15 @@ After the pipeline creates `frame_review.json` and `frame_review_prompt.md`, ins
 **Vision degradation strategy:** If the current model does not support image input (pure text model, or vision API returns 400 errors), do NOT attempt browser_navigate to local file paths. Instead:
 
 1. Read `frame_review.json` and `transcript.json`
-2. For each pending frame, check the timestamp against the transcript
-3. Accept frames at clear content boundaries (heading mentions, topic shifts, new chapter)
-4. Reject frames in silent/gap transitions or pure filler segments
-5. Write the results directly into `frame_review.json` (status, reason, checks)
-6. Report: "Model does not support vision — reviewed N frames by transcript alignment, accepted X, rejected Y"
+2. Apply auto-rules first to eliminate obvious cases without per-frame deliberation:
+   - Timestamp lands on transcript lines matching `大家好|欢迎|感谢|收看|下期|再见` → **auto-reject** (greeting/farewell)
+   - Timestamp lands on transcript lines matching `总结|最后|推荐|核心|关键是|重点` → **auto-accept** (key insight)
+   - Adjacent frames < 3s apart with nearly identical transcript text → keep the first, **auto-reject** the rest (duplicate)
+3. Review remaining frames manually via timestamp-transcript alignment
+4. Write results into `frame_review.json` (status, reason, checks)
+5. Report: "Text review: N frames, X auto-rejected, Y auto-accepted, Z manual — final: A accepted, R rejected"
+
+**Screenshot timing:** Scene-change detection may capture frames during slide transitions (PPT half-flipped, speaker mid-sentence). If the transcript at the frame's timestamp looks like the *start* of a new topic but the visual timing feels early, prefer `replacement_candidates` (dense frames extracted at 1fps around the timestamp) — they often include a frame ~1-3s later with the slide fully settled.
 
 Do not waste time trying multiple vision approaches when the model is text-only. One 400 error is enough signal.
 
@@ -143,24 +147,41 @@ The user should never see raw tool calls (`read_file`, `patch`, `grep`, `bash`, 
 
 ### Background Process Monitoring
 
-**Always redirect pipeline output to a log file.** When you run `process-video-url.ps1`, use shell redirection so raw output never spills into the chat after completion:
+**Always redirect pipeline output to a log file** and disable completion notification:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File <repo>\scripts\process-video-url.ps1 "<url>" > pipeline.log 2>&1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File <repo>\scripts\process-video-url.ps1 "<url>" -Language auto -AsrModel auto -AsrDevice auto > pipeline.log 2>&1
 ```
 
-Then monitor `[STAGE]` markers by reading the log:
+**Do NOT use `notify_on_complete`** — even with `2>&1`, residual stderr and buffered output can leak into the completion notification. Instead, manually check for completion.
 
-```
-tail -f pipeline.log | grep --line-buffered "\[STAGE\]"
-```
+**WSL log buffering:** PowerShell output buffering means `pipeline.log` may stay empty long after the process starts. `tail -f` is unreliable. Use these methods instead (in priority order):
 
-Or check output files as a fallback:
-- **ASR in progress:** check if `transcript.json` file size is growing
-- **Pipeline running:** watch for new files appearing in the analysis directory
-- **PDF conversion:** check if the `.pdf` file exists and is non-zero
+1. **Check the analysis directory for new folders:**
+   ```bash
+   ls -lt <repo>/analysis/ | head -5
+   ```
+   A new directory appearing = pipeline is in stage 2 (keyframes).
 
-After the pipeline exits, read `pipeline.json` for the structured summary — do NOT dump `pipeline.log` to the user.
+2. **Check for `audio.wav` file size growth** during ASR stage:
+   ```bash
+   stat --format=%s <audio_dir>/audio.wav 2>/dev/null
+   ```
+
+3. **ASR progress via `transcript.json` file size:**
+   ```bash
+   stat --format=%s <audio_dir>/transcript.json 2>/dev/null
+   ```
+   - File exists but < 1KB → ASR just started
+   - File growing steadily → ASR in progress, estimate percentage from video duration
+   - File stops growing for >2 min → ASR complete
+   - Relay to user: "转录中 ~40% (30KB)" or "转录即将完成..."
+
+4. **Check if pipeline is done:**
+   ```bash
+   ls <analysis_dir>/pipeline.json 2>/dev/null
+   ```
+   `pipeline.json` exists → pipeline complete. Read it for structured results. Never dump `pipeline.log` to the user.
 
 ### Other Rules
 
@@ -275,8 +296,13 @@ For user-facing packages, use title-based filenames:
 
 - `<safe-title>.note.docx`: editable main deliverable
 - `<safe-title>.note.pdf`: read-only preview/export
+- `<safe-title>.note.txt`: plain-text summary for IM/CLI sharing (see Plain-Text Output Format)
 - `<safe-title>.source.md`: optional source Markdown
 - `<safe-title>.pipeline.json`: optional processing trace
+
+**Always generate the `.txt` summary.** After DOCX/PDF export, write a concise plain-text summary file using the Plain-Text Output Format. This is what Feishu/WeChat users can read without downloading anything. Post it directly in chat as the final result.
+
+**Markdown image paths:** `![](frames/frame_00001.jpg)` paths in the `.md` file are relative to the analysis directory. If the user opens the `.md` in an editor outside the analysis dir, images won't load. The DOCX and PDF have images embedded — recommend those for viewing.
 
 Keep working files such as `final_tutorial.md` internal. Do not call the public output `final`.
 
