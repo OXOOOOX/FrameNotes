@@ -1,7 +1,7 @@
 ---
 name: framenotes
 description: Turn online or local teaching videos into editable visual note packages. Use when Codex is given a video URL or video file and asked to download, transcribe, summarize, create notes, create a tutorial, extract screenshots, review screenshot quality, run ASR, or export editable DOCX/PDF deliverables from video content.
-version: "2026-05-11"
+version: "2026-05-11.2"
 ---
 
 # FrameNotes
