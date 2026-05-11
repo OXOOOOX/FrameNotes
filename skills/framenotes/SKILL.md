@@ -1,7 +1,7 @@
 ---
 name: framenotes
 description: Turn online or local teaching videos into editable visual note packages. Use when Codex is given a video URL or video file and asked to download, transcribe, summarize, create notes, create a tutorial, extract screenshots, review screenshot quality, run ASR, or export editable DOCX/PDF deliverables from video content.
-version: "2026-05-11.5"
+version: "2026-05-11.6"
 ---
 
 # FrameNotes
@@ -172,6 +172,45 @@ After the pipeline exits, read `pipeline.json` for the structured summary — do
 - `requirements.txt` packages are installed (spot-check `python -c "import docx"`)
 
 **Progress beats silence.** For pipelines expected to run >2 minutes, relay `[STAGE]` markers to the user. Never leave the user staring at a blank chat.
+
+### Plain-Text Output Format
+
+The user is in CLI or IM (WeChat/Feishu) — **Markdown is not rendered.** All final summaries, notes, and results must be formatted for plain-text readability:
+
+- Use `【】` for section headings: `【视频笔记】开发板怎么选`
+- Use `·` for bullet points (not `- `)
+- Use `→` for mapping/association (not `→`)
+- Use `───` for dividers (not `---`)
+- Use `☆` and `★` for star ratings: `★★★☆☆`
+- Use `「」` for quotes or key terms
+- Bold emphasis: use `【】` brackets instead of `**`
+- Never use markdown tables (`|`). Use indented key-value lines instead
+
+Example of a clean plain-text summary:
+
+```
+全部完成！
+
+【视频笔记】开发板新手上路怎么选
+时长 10分30秒 · 来源 Bilibili
+内容 三位资深达人对比三款主流开发板的选购指南
+
+【处理摘要】
+  下载    1080p，70MB
+  关键帧  37 帧提取
+  ASR    310 段，中文，99.7%
+  审查    17 张接受，7 张拒绝
+
+【核心要点】
+  · Arduino → 极简硬件入门，~30-100 元，零基础友好
+  · ESP32   → 物联网+控制，~20-30 元，性价比之王
+  · 树莓派  → 小型计算机，~400-600 元，适合系统编程
+  · 学习路径 Arduino(1-2月) → ESP32(2-3月) → 树莓派(按需)
+
+【产出文件】
+  · 开发板怎么选.note.docx (1.1 MB)
+  · 开发板怎么选.note.pdf (4.8 MB)
+```
 
 ## Note Quality
 
