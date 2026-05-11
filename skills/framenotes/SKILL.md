@@ -1,7 +1,7 @@
 ---
 name: framenotes
 description: Turn online or local teaching videos into editable visual note packages. Use when Codex is given a video URL or video file and asked to download, transcribe, summarize, create notes, create a tutorial, extract screenshots, review screenshot quality, run ASR, or export editable DOCX/PDF deliverables from video content.
-version: "2026-05-11.4"
+version: "2026-05-11.5"
 ---
 
 # FrameNotes
@@ -44,11 +44,13 @@ If the user declines, say "no problem" and proceed with guest mode — the pipel
 
 ## Core Command
 
-For a URL, run the full pipeline (use `powershell.exe` on WSL/Linux):
+For a URL, run the full pipeline (use `powershell.exe` on WSL/Linux). **Always redirect output to a log file** to prevent raw process output from spilling into the chat after completion:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\process-video-url.ps1 "<video-url>" -Language auto -AsrModel auto -AsrDevice auto
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\process-video-url.ps1 "<video-url>" -Language auto -AsrModel auto -AsrDevice auto > pipeline.log 2>&1
 ```
+
+Monitor `pipeline.log` for `[STAGE]` markers (relay to user). After completion, read `pipeline.json` for structured results — never dump `pipeline.log` to the user.
 
 The pipeline should:
 
@@ -141,13 +143,24 @@ The user should never see raw tool calls (`read_file`, `patch`, `grep`, `bash`, 
 
 ### Background Process Monitoring
 
-On WSL, PowerShell and `cmd.exe` in background mode often produce zero stdout/stderr output even while the process is running fine. Do not trust empty poll results. Instead, check for output files:
+**Always redirect pipeline output to a log file.** When you run `process-video-url.ps1`, use shell redirection so raw output never spills into the chat after completion:
 
-- **ASR in progress:** check if `transcript.json` file size is growing (`ls -la`)
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File <repo>\scripts\process-video-url.ps1 "<url>" > pipeline.log 2>&1
+```
+
+Then monitor `[STAGE]` markers by reading the log:
+
+```
+tail -f pipeline.log | grep --line-buffered "\[STAGE\]"
+```
+
+Or check output files as a fallback:
+- **ASR in progress:** check if `transcript.json` file size is growing
 - **Pipeline running:** watch for new files appearing in the analysis directory
 - **PDF conversion:** check if the `.pdf` file exists and is non-zero
 
-If poll is silent but the expected output file is growing or the process is still alive, do NOT kill the process. Wait and re-check the file. Kill only if the output file is unchanged for >2 minutes.
+After the pipeline exits, read `pipeline.json` for the structured summary — do NOT dump `pipeline.log` to the user.
 
 ### Other Rules
 
