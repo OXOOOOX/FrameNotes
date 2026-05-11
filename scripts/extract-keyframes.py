@@ -46,29 +46,66 @@ def timestamp(seconds):
     return f"{whole // 3600:02d}-{(whole % 3600) // 60:02d}-{whole % 60:02d}"
 
 
-def extract_scene_frames(video, output_dir, ffmpeg, threshold, max_width):
+def extract_scene_frames(video, output_dir, ffmpeg, threshold, max_width, offset, duration):
     frame_pattern = output_dir / "frames" / "frame_%05d.jpg"
     scale_part = f",scale='min({max_width},iw)':-2" if max_width > 0 else ""
-    vf = f"select='gt(scene,{threshold})',showinfo" + scale_part
-    command = [
+
+    # Step 1: detect scene-change times (output to null, no encoding)
+    detect_vf = f"select='gt(scene,{threshold})',showinfo"
+    detect_cmd = [
         str(ffmpeg),
         "-hide_banner",
         "-i", str(video),
-        "-vf", vf,
+        "-vf", detect_vf,
         "-vsync", "vfr",
-        "-q:v", "3",
-        str(frame_pattern),
+        "-f", "null",
+        "-",
     ]
-    process = subprocess.run(command, text=True, capture_output=True)
+    process = subprocess.run(detect_cmd, text=True, capture_output=True)
     if process.returncode != 0:
         raise RuntimeError(process.stderr)
 
-    times = []
+    raw_times = []
     for line in process.stderr.splitlines():
         match = re.search(r"pts_time:([0-9.]+)", line)
         if match:
-            times.append(float(match.group(1)))
-    return times
+            raw_times.append(float(match.group(1)))
+
+    if not raw_times:
+        return []
+
+    # Step 2: offset each timestamp past the transition, clamp to valid range
+    max_time = float(duration) - 0.2 if duration else None
+    adjusted = []
+    for t in raw_times:
+        t2 = t + offset
+        if max_time and t2 >= max_time:
+            t2 = max_time
+        if t2 > 0:
+            adjusted.append(t2)
+
+    # Deduplicate (nearby adjusted times may converge)
+    deduped = []
+    for t in adjusted:
+        if not deduped or t - deduped[-1] > 1.0:
+            deduped.append(t)
+
+    # Step 3: extract frames at adjusted timestamps in a single pass
+    if deduped:
+        conditions = [f"between(t,{t:.3f},{t+0.05:.3f})" for t in deduped]
+        select_expr = "+".join(conditions)
+        vf = f"select='{select_expr}'" + scale_part
+        run([
+            str(ffmpeg),
+            "-hide_banner",
+            "-i", str(video),
+            "-vf", vf,
+            "-vsync", "vfr",
+            "-q:v", "3",
+            str(frame_pattern),
+        ])
+
+    return deduped
 
 
 def extract_interval_frames(video, output_dir, ffmpeg, interval, max_width):
@@ -110,6 +147,7 @@ def main():
     parser.add_argument("video", type=Path)
     parser.add_argument("--output-root", type=Path, default=Path("analysis"))
     parser.add_argument("--scene-threshold", type=float, default=0.18)
+    parser.add_argument("--scene-offset", type=float, default=1.5, help="Seconds to delay after scene change so frames don't land mid-transition.")
     parser.add_argument("--fallback-interval", type=int, default=20)
     parser.add_argument("--max-width", type=int, default=0, help="Max width for extracted frames. 0 = keep original resolution.")
     parser.add_argument("--contact-columns", type=int, default=5)
@@ -130,7 +168,8 @@ def main():
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     metadata = probe(video, ffprobe)
-    times = extract_scene_frames(video, output_dir, ffmpeg, args.scene_threshold, args.max_width)
+    duration = metadata.get("format", {}).get("duration")
+    times = extract_scene_frames(video, output_dir, ffmpeg, args.scene_threshold, args.max_width, args.scene_offset, duration)
     method = "scene"
 
     frames = sorted(frames_dir.glob("frame_*.jpg"))
@@ -160,6 +199,7 @@ def main():
         "created_at": run_id,
         "method": method,
         "scene_threshold": args.scene_threshold,
+        "scene_offset": args.scene_offset,
         "fallback_interval_seconds": args.fallback_interval,
         "metadata": metadata,
         "contact_sheet": contact.name if contact else None,

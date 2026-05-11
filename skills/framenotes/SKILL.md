@@ -1,7 +1,7 @@
 ---
 name: framenotes
 description: Turn online or local teaching videos into editable visual note packages. Use when Codex is given a video URL or video file and asked to download, transcribe, summarize, create notes, create a tutorial, extract screenshots, review screenshot quality, run ASR, or export editable DOCX/PDF deliverables from video content.
-version: "2026-05-11.7"
+version: "2026-05-11.8"
 ---
 
 # FrameNotes
@@ -55,7 +55,7 @@ Monitor `pipeline.log` for `[STAGE]` markers (relay to user). After completion, 
 The pipeline should:
 
 1. download/import the video (max 1080p)
-2. extract scene-change frames at original resolution
+2. extract scene-change frames at original resolution (1.5s offset past transition)
 3. build the multimodal frame package
 4. prepare the agent frame review package with nearby dense candidate frames
 5. generate downsampled preview frames (`preview_frames/`) for agent review

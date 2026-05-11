@@ -6,6 +6,8 @@ param(
 
     [double]$SceneThreshold = 0.18,
 
+    [double]$SceneOffset = 1.5,
+
     [int]$FallbackInterval = 20
 )
 
@@ -22,6 +24,7 @@ if (-not (Test-Path $venvPython)) {
     $Video `
     --output-root (Join-Path $repoRoot $OutputRoot) `
     --scene-threshold $SceneThreshold `
+    --scene-offset $SceneOffset `
     --fallback-interval $FallbackInterval
 
 exit $LASTEXITCODE
