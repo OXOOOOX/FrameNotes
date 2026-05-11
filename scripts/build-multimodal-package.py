@@ -28,7 +28,7 @@ def main():
 
     frames_json = args.frames_json.resolve()
     analysis_dir = frames_json.parent
-    manifest = json.loads(frames_json.read_text(encoding="utf-8"))
+    manifest = json.loads(frames_json.read_text(encoding="utf-8-sig"))
     selected = pick_evenly(manifest["frames"], args.max_frames)
 
     selected_payload = {

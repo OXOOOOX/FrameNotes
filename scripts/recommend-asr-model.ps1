@@ -103,3 +103,10 @@ Write-Host ""
 Write-Host "Recommended: $recommended ($reason)"
 Write-Host "recommended_model=$recommended"
 Write-Host "recommended_device=$asrDevice"
+Write-Host ""
+if ($recommended -eq "medium") {
+    Write-Host "First-time note: model download is ~1.5 GB (~1-3 min depending on network)."
+    Write-Host "If this is the first run, add 1-3 min to the estimated time above."
+} elseif ($recommended -eq "small") {
+    Write-Host "First-time note: model download is ~0.5 GB (~30-60s depending on network)."
+}

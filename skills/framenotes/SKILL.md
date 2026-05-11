@@ -1,7 +1,7 @@
 ---
 name: framenotes
 description: Turn online or local teaching videos into editable visual note packages. Use when Codex is given a video URL or video file and asked to download, transcribe, summarize, create notes, create a tutorial, extract screenshots, review screenshot quality, run ASR, or export editable DOCX/PDF deliverables from video content.
-version: "2026-05-11.3"
+version: "2026-05-11.4"
 ---
 
 # FrameNotes
@@ -125,16 +125,40 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\transcribe-segment
 
 Core rules for how you present work to the user:
 
-**Do NOT expose internal operations.** The user should never see raw `read_file`, `patch`, `grep`, `bash`, or other tool call details. When you need to fix a bug or inspect code mid-session, do it quietly. Tell the user the result ("fixed, re-running export" / "已修复，重新导出中"), not the process.
+### Internal Operation Transparency — Hard Boundary
 
-**Handle missing dependencies silently.** If a script fails with `ModuleNotFoundError`, install the missing package in `.venv/` and retry automatically. Only inform the user if the fix requires their action (e.g., "need to install system package X").
+The user should never see raw tool calls (`read_file`, `patch`, `grep`, `bash`, `cmd.exe`, poll loops). When you need to fix a bug or inspect code mid-session, do it quietly — tell the user the result, not the process.
+
+**Hard rule:** When 3 consecutive tool calls are purely debugging (poll showing empty, process troubleshooting, path trial-and-error), you MUST suppress all internal output before the 4th call. From that point forward, tell the user only stage-level results. Never show:
+
+- Raw `cmd.exe /c` or `powershell.exe` command strings
+- `process(action='poll')` output (blank or otherwise)
+- Terminal tracebacks or error codes
+- Kill-and-retry loops
+
+✅ Correct: "ASR 首次运行需下载模型，稍等片刻..."
+❌ Wrong: "ASR 进程超时 600s 只跑到 41%，kill 掉重试…"
+
+### Background Process Monitoring
+
+On WSL, PowerShell and `cmd.exe` in background mode often produce zero stdout/stderr output even while the process is running fine. Do not trust empty poll results. Instead, check for output files:
+
+- **ASR in progress:** check if `transcript.json` file size is growing (`ls -la`)
+- **Pipeline running:** watch for new files appearing in the analysis directory
+- **PDF conversion:** check if the `.pdf` file exists and is non-zero
+
+If poll is silent but the expected output file is growing or the process is still alive, do NOT kill the process. Wait and re-check the file. Kill only if the output file is unchanged for >2 minutes.
+
+### Other Rules
+
+**Handle missing dependencies silently.** If a script fails with `ModuleNotFoundError`, install the missing package in `.venv/` and retry automatically. Only inform the user if the fix requires their action.
 
 **Pre-check before running.** Before starting the pipeline, quickly verify:
 - `powershell.exe` works (WSL: use `powershell.exe`, not `powershell`)
 - `.venv/Scripts/python.exe` exists
 - `requirements.txt` packages are installed (spot-check `python -c "import docx"`)
 
-**Progress beats silence.** For pipelines expected to run >2 minutes, relay `[STAGE]` markers to the user so they know progress is happening. Never leave the user staring at a blank chat for 38 minutes.
+**Progress beats silence.** For pipelines expected to run >2 minutes, relay `[STAGE]` markers to the user. Never leave the user staring at a blank chat.
 
 ## Note Quality
 
@@ -220,6 +244,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\export-tutoria
 This tries `docx2pdf` first, then falls back to Word COM. Install `docx2pdf` with `.\.venv\Scripts\pip.exe install docx2pdf` if needed.
 
 When producing DOCX/PDF, use the Documents skill if available and render/verify the document before delivery. If LibreOffice is unavailable on Windows, Microsoft Word COM plus PDF-to-PNG rendering is acceptable for visual QA.
+
+## JSON Encoding
+
+All pipeline JSON files (frames.json, transcript.json, frame_review.json, pipeline.json) must be UTF-8 without BOM. When reading these files in Python, use `encoding="utf-8-sig"` to tolerate a BOM if one is present from PowerShell's `Set-Content -Encoding UTF8`. When writing, always use `encoding="utf-8"` (BOM-free).
 
 ## Git And File Safety
 

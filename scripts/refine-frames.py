@@ -73,7 +73,7 @@ def main():
     args = parser.parse_args()
 
     selected_path = args.selected_frames_json.resolve()
-    selected = json.loads(selected_path.read_text(encoding="utf-8"))
+    selected = json.loads(selected_path.read_text(encoding="utf-8-sig"))
     analysis_dir = selected_path.parent
     video = Path(selected["source_video"])
     ffmpeg = ffmpeg_bin(args.ffmpeg)
