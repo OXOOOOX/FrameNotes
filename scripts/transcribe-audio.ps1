@@ -16,11 +16,27 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
 $audioPath = Resolve-Path -LiteralPath $Audio
+if (-not (Test-Path $venvPython)) {
+    throw "Project Python environment not found. Run: python -m venv .venv"
+}
+
 $modelArg = $Model
-$localModelPath = Join-Path $repoRoot ".models\faster-whisper-$Model"
+$modelsDir = Join-Path $HOME ".cache\framenotes\models"
+$localModelPath = Join-Path $modelsDir "faster-whisper-$Model"
 
 if (Test-Path (Join-Path $localModelPath "model.bin")) {
     $modelArg = $localModelPath
+} else {
+    Write-Host ""
+    Write-Host "=============================================="
+    Write-Host "  Faster-Whisper model '$Model' not found at:"
+    Write-Host "    $localModelPath"
+    Write-Host ""
+    Write-Host "  Manual download (recommended in China):"
+    Write-Host "    https://hf-mirror.com/Systran/faster-whisper-$Model"
+    Write-Host "    Place all files in the directory shown above."
+    Write-Host "=============================================="
+    Write-Host ""
 }
 
 $deviceArg = $Device
@@ -29,10 +45,6 @@ if ($Device -eq "auto") {
     $deviceInfo = $deviceInfoText | ConvertFrom-Json
     $deviceArg = $deviceInfo.recommended_device
     Write-Host "ASR device: $deviceArg"
-}
-
-if (-not (Test-Path $venvPython)) {
-    throw "Project Python environment not found. Run: python -m venv .venv"
 }
 
 & $venvPython (Join-Path $PSScriptRoot "transcribe-audio.py") `

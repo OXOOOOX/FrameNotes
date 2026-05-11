@@ -134,6 +134,13 @@ Add-PipelineStage $pipelineStages "frame_review_package" $stageStart @{
     dense_candidates = $denseCandidatesPath
 }
 
+Write-Host "      生成审查用预览帧 (720p)"
+$previewResult = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "downsample-review-frames.ps1") -FrameReviewJson $frameReviewPath
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Preview frame generation failed; review will use original frames"
+}
+Write-Host "      预览帧生成完成"
+
 $stageStart = Start-PipelineStage 5 $stageTotal "Extracting audio for ASR"
 $audioOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "extract-audio.ps1") -Video $video.FullName
 if ($LASTEXITCODE -ne 0) {
@@ -162,9 +169,10 @@ if ($AsrModel -eq "auto") {
     }
 }
 
-if ($AsrModel -notmatch "[\\/]" -and -not (Test-Path (Join-Path $repoRoot ".models\faster-whisper-$AsrModel\model.bin"))) {
+$modelsDir = Join-Path $HOME ".cache\framenotes\models"
+if ($AsrModel -notmatch "[\\/]" -and -not (Test-Path (Join-Path $modelsDir "faster-whisper-$AsrModel\model.bin"))) {
     Write-Host "      local ASR model not found; downloading faster-whisper-$AsrModel"
-    Invoke-Checked { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "download-whisper-model.ps1") -Model $AsrModel } "ASR model download failed."
+    Invoke-Checked { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "download-whisper-model.ps1") -Model $AsrModel -AutoDownload } "ASR model download failed."
 }
 
 $stageStart = Start-PipelineStage 6 $stageTotal "Running ASR with faster-whisper model '$AsrModel'"
@@ -176,7 +184,25 @@ $transcript = Get-ChildItem -Path $audio.DirectoryName -Filter transcript.txt -F
 $transcriptJson = Get-ChildItem -Path $audio.DirectoryName -Filter transcript.json -File |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
-Add-PipelineStage $pipelineStages "asr" $stageStart @{ transcript = $transcript.FullName; transcript_json = $transcriptJson.FullName; model = $AsrModel; device = $AsrDevice }
+if (-not $transcript) {
+    Write-Warning "ASR completed but no transcript.txt was found."
+}
+if (-not $transcriptJson) {
+    Write-Warning "ASR completed but no transcript.json was found."
+}
+Add-PipelineStage $pipelineStages "asr" $stageStart @{ transcript = if ($transcript) { $transcript.FullName } else { $null }; transcript_json = if ($transcriptJson) { $transcriptJson.FullName } else { $null }; model = $AsrModel; device = $AsrDevice }
+
+$prescreenStageStart = Get-Date
+Write-Host "      pre-screening frames via text LLM (skip obvious rejects)"
+if ($transcriptJson) {
+    $prescreenResult = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "prescreen-frames.ps1") -FrameReviewJson $frameReviewPath -Transcript $transcriptJson.FullName
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Frame pre-screening failed; all frames will go to multimodal review"
+    }
+} else {
+    Write-Warning "No transcript available; skipping pre-screen"
+}
+Add-PipelineStage $pipelineStages "prescreen" $prescreenStageStart @{ frame_review = $frameReviewPath }
 
 $pipelineManifest = [ordered]@{
     url = $Url
@@ -186,13 +212,13 @@ $pipelineManifest = [ordered]@{
     video = $video.FullName
     analysis = $framesJson.DirectoryName
     audio_dir = $audio.DirectoryName
-    transcript = $transcript.FullName
+    transcript = if ($transcript) { $transcript.FullName } else { $null }
     stages = $pipelineStages
 }
 $pipelinePath = Join-Path $framesJson.DirectoryName "pipeline.json"
 $pipelineManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $pipelinePath -Encoding UTF8
 
 Write-Host "Done."
-Write-Host "      transcript: $($transcript.FullName)"
+if ($transcript) { Write-Host "      transcript: $($transcript.FullName)" }
 Write-Host "      analysis: $($framesJson.DirectoryName)"
 Write-Host "      pipeline: $pipelinePath"

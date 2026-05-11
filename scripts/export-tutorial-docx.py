@@ -244,7 +244,11 @@ def main():
     if args.output:
         output = args.output.resolve()
     elif args.name_prefix:
-        output = md_path.with_name(f"{args.name_prefix}.docx")
+        prefix = Path(args.name_prefix)
+        if prefix.parent != Path("."):
+            output = prefix.with_suffix(".docx").resolve()
+        else:
+            output = md_path.with_name(f"{args.name_prefix}.docx")
     else:
         output = md_path.with_suffix(".docx")
 

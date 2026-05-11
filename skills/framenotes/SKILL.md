@@ -1,6 +1,7 @@
 ---
 name: framenotes
 description: Turn online or local teaching videos into editable visual note packages. Use when Codex is given a video URL or video file and asked to download, transcribe, summarize, create notes, create a tutorial, extract screenshots, review screenshot quality, run ASR, or export editable DOCX/PDF deliverables from video content.
+version: "2026-05-11"
 ---
 
 # FrameNotes
@@ -13,6 +14,20 @@ Prefer an existing FrameNotes repo when present. If the repo location is unknown
 
 Generated media and process artifacts belong under `media/` and `analysis/`. Do not ask the user to approve every stage; print concise progress and artifact paths while running.
 
+## BiliBili Login
+
+For BiliBili URLs, a cookies.txt at the repo root unlocks 720p/1080p. Without it, downloads cap at 480p — screenshots suffer noticeably.
+
+When starting a BiliBili video: if `cookies.txt` already exists in the repo root, proceed silently. If not, recommend the user export one:
+
+1. Install the browser extension **Get cookies.txt LOCALLY** (Chrome/Edge)
+2. Visit bilibili.com and log in
+3. Click the extension icon → Export → save as `cookies.txt` in the repo root
+
+If the user declines, say "no problem" and proceed with guest mode — the pipeline handles both paths. Never pressure the user.
+
+`scripts/download-video.ps1` auto-detects `cookies.txt` at the repo root; no extra flags needed.
+
 ## Core Command
 
 For a URL, run the full pipeline:
@@ -23,19 +38,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\process-video-url.
 
 The pipeline should:
 
-1. download/import the video
-2. extract scene-change frames
+1. download/import the video (max 1080p)
+2. extract scene-change frames at original resolution
 3. build the multimodal frame package
 4. prepare the agent frame review package with nearby dense candidate frames
-5. extract audio
-6. run faster-whisper ASR
-7. write `pipeline.json`
+5. generate downsampled preview frames (`preview_frames/`) for agent review
+6. extract audio
+7. run faster-whisper ASR
+8. text pre-screen frames: use transcript context to mark obvious rejects (skip multimodal for those)
+9. write `pipeline.json`
 
 Use `-AsrModel auto -AsrDevice auto` unless the user explicitly requests a model/device. The project should prefer CUDA only when CUDA ASR is already usable; if an NVIDIA GPU is present but CUDA is not ready, recommend the CPU first run and show the optional CUDA setup path.
 
 ## Screenshot Review
 
-After the pipeline creates `frame_review.json` and `frame_review_prompt.md`, inspect the selected screenshots and candidates as an agent with multimodal image understanding. Do not create a separate vision API integration for this step.
+After the pipeline creates `frame_review.json` and `frame_review_prompt.md`, inspect the selected screenshots and candidates as an agent with multimodal image understanding. Use `preview_frames/` (downsampled to 720p) when the original `frames/` are too large for the multimodal viewer. Do not create a separate vision API integration for this step.
 
 For each selected screenshot:
 
@@ -84,9 +101,20 @@ Start the note with a decision block:
 - estimated reading time
 - whether the original video is still worth watching
 
-For operation/tutorial videos, produce a usable tutorial, not just a summary. Each step should include goal, timestamp, screenshot reference, action, expected result, and common mistakes/checks.
+For operation/tutorial videos, produce a usable tutorial, not just a summary. Each step must include goal, timestamp, action, expected result, and common mistakes/checks.
 
-For concept explainers, prefer a chapter timeline, core ideas, comparisons, and screenshot evidence. Do not force a step-by-step tutorial when the video is not procedural.
+**Every accepted (or replaced) frame from `frame_review.json` MUST appear in the tutorial as a markdown image on its own line using the exact relative path from the tutorial to the frame file:**
+
+```
+![](frames/frame_00001.jpg)
+```
+
+- Place the image line immediately after the step heading, before the bullet points.
+- Each step that has a screenshot gets at least one matching `![](frames/frame_XXXXX.jpg)` line — do not merely write the frame name in text.
+- If a step has multiple accepted frames, include each on its own line.
+- The image paths are relative: the tutorial lives in the analysis directory, so `frames/` is a subdirectory there.
+
+For concept explainers, prefer a chapter timeline, core ideas, comparisons, and screenshot evidence (still using `![](frames/frame_XXXXX.jpg)` on its own line for each relevant frame). Do not force a step-by-step tutorial when the video is not procedural.
 
 ## Deliverables
 

@@ -5,7 +5,9 @@ param(
     [string]$OutputRoot = "media",
 
     [ValidateSet("none", "edge", "chrome", "firefox")]
-    [string]$CookiesFromBrowser = "none"
+    [string]$CookiesFromBrowser = "none",
+
+    [string]$Cookies = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +15,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $outputPath = Join-Path $repoRoot $OutputRoot
 $venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
+$repoCookies = Join-Path $repoRoot "cookies.txt"
 $wingetFfmpeg = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter ffmpeg.exe -Recurse -File -ErrorAction SilentlyContinue |
     Select-Object -First 1 -ExpandProperty DirectoryName
 
@@ -35,15 +38,23 @@ $args = @(
     "--write-auto-subs",
     "--sub-langs", "zh-CN,zh-Hans,zh-Hant,en",
     "--keep-video",
-    "--merge-output-format", "mp4"
+    "--merge-output-format", "mp4",
+    "--format", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
 )
 
 if ($wingetFfmpeg) {
     $args += @("--ffmpeg-location", $wingetFfmpeg)
 }
 
-if ($CookiesFromBrowser -ne "none") {
+if ($Cookies) {
+    $args += @("--cookies", $Cookies)
+}
+elseif ($CookiesFromBrowser -ne "none") {
     $args += @("--cookies-from-browser", $CookiesFromBrowser)
+}
+elseif (Test-Path $repoCookies) {
+    Write-Host "      using cookies.txt from repo root"
+    $args += @("--cookies", $repoCookies)
 }
 
 $args += $Url

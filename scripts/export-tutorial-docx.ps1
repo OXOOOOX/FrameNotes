@@ -9,8 +9,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$python = "C:\Users\23479\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$python = Join-Path $repoRoot ".venv\Scripts\python.exe"
 $mdPath = Resolve-Path -LiteralPath $Markdown
+
+if (-not (Test-Path $python)) {
+    throw "Project Python environment not found. Run: python -m venv .venv"
+}
 
 $args = @(
     (Join-Path $PSScriptRoot "export-tutorial-docx.py"),

@@ -48,7 +48,8 @@ def timestamp(seconds):
 
 def extract_scene_frames(video, output_dir, ffmpeg, threshold, max_width):
     frame_pattern = output_dir / "frames" / "frame_%05d.jpg"
-    vf = f"select='gt(scene,{threshold})',showinfo,scale='min({max_width},iw)':-2"
+    scale_part = f",scale='min({max_width},iw)':-2" if max_width > 0 else ""
+    vf = f"select='gt(scene,{threshold})',showinfo" + scale_part
     command = [
         str(ffmpeg),
         "-hide_banner",
@@ -72,7 +73,8 @@ def extract_scene_frames(video, output_dir, ffmpeg, threshold, max_width):
 
 def extract_interval_frames(video, output_dir, ffmpeg, interval, max_width):
     frame_pattern = output_dir / "frames" / "frame_%05d.jpg"
-    vf = f"fps=1/{interval},scale='min({max_width},iw)':-2"
+    scale_part = f",scale='min({max_width},iw)':-2" if max_width > 0 else ""
+    vf = f"fps=1/{interval}" + scale_part
     run([
         str(ffmpeg),
         "-hide_banner",
@@ -109,7 +111,7 @@ def main():
     parser.add_argument("--output-root", type=Path, default=Path("analysis"))
     parser.add_argument("--scene-threshold", type=float, default=0.18)
     parser.add_argument("--fallback-interval", type=int, default=20)
-    parser.add_argument("--max-width", type=int, default=1280)
+    parser.add_argument("--max-width", type=int, default=0, help="Max width for extracted frames. 0 = keep original resolution.")
     parser.add_argument("--contact-columns", type=int, default=5)
     parser.add_argument("--ffmpeg", type=Path)
     args = parser.parse_args()
@@ -125,7 +127,7 @@ def main():
     stem = re.sub(r"[^\w.-]+", "_", video.stem, flags=re.UNICODE).strip("_")[:80]
     output_dir = (args.output_root / f"{stem}_{run_id}").resolve()
     frames_dir = output_dir / "frames"
-    frames_dir.mkdir(parents=True, exist_ok=False)
+    frames_dir.mkdir(parents=True, exist_ok=True)
 
     metadata = probe(video, ffprobe)
     times = extract_scene_frames(video, output_dir, ffmpeg, args.scene_threshold, args.max_width)
@@ -136,7 +138,7 @@ def main():
         method = "interval"
         output_dir = (args.output_root / f"{stem}_{run_id}_interval").resolve()
         frames_dir = output_dir / "frames"
-        frames_dir.mkdir(parents=True, exist_ok=False)
+        frames_dir.mkdir(parents=True, exist_ok=True)
         extract_interval_frames(video, output_dir, ffmpeg, args.fallback_interval, args.max_width)
         frames = sorted(frames_dir.glob("frame_*.jpg"))
         times = [index * args.fallback_interval for index in range(len(frames))]
